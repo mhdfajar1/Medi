@@ -1,0 +1,7 @@
+{
+  "name": "MediChain Secure",
+  "description": "A decentralized healthcare platform using Blockchain for data integrity and IPFS for storage, featuring role-based access control and AI-powered medical record analysis.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
