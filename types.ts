@@ -10,8 +10,10 @@ export interface User {
   id: string;
   name: string;
   email?: string; // Added email field
+  password: string; // Added password field for authentication
   role: UserRole;
   walletAddress: string;
+  recoveryPhrase: string; // For account recovery
   isAuthorized: boolean; // For doctors/hospitals needing admin approval
   is2FAEnabled?: boolean; // Two-factor authentication status
   licenseNumber?: string; // Specific for doctors

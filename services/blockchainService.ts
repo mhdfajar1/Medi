@@ -23,10 +23,30 @@ const getStored = <T>(key: string, defaultVal: T): T => {
 const setStored = (key: string, val: any) => {
   localStorage.setItem(key, JSON.stringify(val));
 };
+const words = [
+ "apple","river","stone","ocean","vault",
+ "maple","doctor","alpha","beta","gamma",
+ "secure","health","block","chain","trust"
+];
+
+export const generateRecoveryPhrase = () => {
+ return Array.from({length:8})
+  .map(() => words[Math.floor(Math.random()*words.length)])
+  .join(" ");
+};
 
 // Seed Data
 const seedUsers: User[] = [
-  { id: 'admin1', name: 'System Admin', email: 'admin@medichain.com', role: UserRole.ADMIN, walletAddress: '0x71C...ADMIN', isAuthorized: true, is2FAEnabled: false },
+  { 
+    id: 'admin1',
+    name: 'System Admin',
+    email: 'admin@medichain.com',
+    password: 'admin123',
+    role: UserRole.ADMIN,
+    walletAddress: '0x71C...ADMIN',
+    recoveryPhrase: generateRecoveryPhrase(),
+    isAuthorized: true,
+    is2FAEnabled: false },
 ];
 
 const seedRecords: MedicalRecord[] = [];
@@ -94,6 +114,7 @@ export const registerUser = async (
   email: string,
   name: string, 
   role: UserRole, 
+  password: string,
   licenseNumber?: string,
   specialization?: string,
   experience?: number
@@ -110,8 +131,10 @@ export const registerUser = async (
     id: `${role.toLowerCase().slice(0,3)}_${Date.now()}`, // Internal ID
     name,
     email,
+    password,
     role,
     walletAddress,
+    recoveryPhrase: generateRecoveryPhrase(),
     // Doctors require approval, Patients auto-approve for this demo
     isAuthorized: role === UserRole.PATIENT,
     is2FAEnabled: false, 

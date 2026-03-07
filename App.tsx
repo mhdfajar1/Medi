@@ -17,11 +17,16 @@ const App: React.FC = () => {
   const [walletAddress, setWalletAddress] = useState<string | null>(null);
   
   // Auth State
-  const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER' | 'ADMIN'>('LOGIN');
+  const [authMode, setAuthMode] = useState<'LOGIN' | 'REGISTER' | 'ADMIN' | 'RESET'>('LOGIN');
 
   // Login Form State
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [resetEmail, setResetEmail] = useState('');
+  const [resetPhrase, setResetPhrase] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [generatedPhrase, setGeneratedPhrase] = useState('');
 
   // Admin Credentials State
   const [adminUser, setAdminUser] = useState('');
@@ -62,41 +67,45 @@ const App: React.FC = () => {
   // --- LOGIN LOGIC ---
 
   const handleEmailLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!loginEmail || !loginPassword) {
-      alert("Please enter both email and password.");
+  e.preventDefault();
+
+  if (!loginEmail || !loginPassword) {
+    alert("Please enter both email and password.");
+    return;
+  }
+
+  setLoading(true);
+
+  try {
+    const derivedAddress = blockchain.getWalletFromEmail(loginEmail);
+    const existingUser = await blockchain.getUserByWallet(derivedAddress);
+
+    if (!existingUser) {
+      alert("Invalid email or password.");
       return;
     }
-    
-    setLoading(true);
-    try {
-      // Generate deterministic wallet from email
-      const derivedAddress = blockchain.getWalletFromEmail(loginEmail);
-      const existingUser = await blockchain.getUserByWallet(derivedAddress);
 
-      if (existingUser) {
-        // User exists, proceed to login
-        if (existingUser.is2FAEnabled) {
-          setTempUser(existingUser);
-          setShow2FAInput(true);
-        } else {
-          setUser(existingUser);
-          setWalletAddress(derivedAddress);
-          setActiveTab('dashboard');
-        }
-      } else {
-        // User does not exist - Redirect to Registration
-        if (window.confirm("Account not found. Do you want to create a new account?")) {
-          setAuthMode('REGISTER');
-          setRegEmail(loginEmail); // Pre-fill email
-        }
-      }
-    } catch (error: any) {
-      alert(error.message);
-    } finally {
-      setLoading(false);
+    if (existingUser.password !== loginPassword) {
+      alert("Invalid email or password.");
+      return;
     }
-  };
+
+    // LOGIN SUCCESS
+    if (existingUser.is2FAEnabled) {
+      setTempUser(existingUser);
+      setShow2FAInput(true);
+    } else {
+      setUser(existingUser);
+      setWalletAddress(derivedAddress);
+      setActiveTab('dashboard');
+    }
+
+  } catch (error: any) {
+    alert(error.message);
+  } finally {
+    setLoading(false);
+  }
+};
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -169,11 +178,12 @@ const App: React.FC = () => {
       const derivedAddress = blockchain.getWalletFromEmail(regEmail);
 
       // Register the user on blockchain/DB
-      await blockchain.registerUser(
+      const newUser = await blockchain.registerUser(
         derivedAddress,
         regEmail,
         regName, 
-        regRole, 
+        regRole,
+        regPassword, 
         regLicense, 
         regSpecialization, 
         regExperience ? parseInt(regExperience) : undefined
@@ -188,7 +198,8 @@ const App: React.FC = () => {
       setRegExperience('');
       
       // Redirect to Login instead of auto-login
-      alert("Registration Successful! Please sign in with your email to access the platform.");
+      setGeneratedPhrase(newUser.recoveryPhrase);
+      setShowRecovery(true);
       setAuthMode('LOGIN');
       
     } catch (e: any) {
@@ -308,6 +319,45 @@ const App: React.FC = () => {
           </button>
 
           <div className="w-full max-w-md space-y-8">
+            {showRecovery && (
+              <div className="bg-yellow-50 border border-yellow-300 rounded-xl p-6 space-y-4">
+                
+                <h3 className="text-lg font-bold text-yellow-800">
+                  Save Your Recovery Phrase
+                </h3>
+
+                <p className="text-sm text-yellow-700">
+                  This phrase is the ONLY way to recover your account if you forget your password.
+                </p>
+
+                <div className="w-full p-3 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-teal-500 bg-white dark:bg-slate-800 dark:text-white">
+                  {generatedPhrase}
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard.writeText(generatedPhrase);
+                    alert("Recovery phrase copied!");
+                  }}
+                  className="w-full py-2 bg-teal-600 text-white rounded-lg"
+                >
+                  Copy Recovery Phrase
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowRecovery(false);
+                    setAuthMode("LOGIN");
+                  }}
+                  className="w-full text-sm text-slate-500"
+                >
+                  Continue to Login
+                </button>
+
+              </div>
+            )}
             
             {/* 2FA Overlay */}
             {show2FAInput ? (
@@ -389,6 +439,15 @@ const App: React.FC = () => {
                              placeholder="••••••••" 
                           />
                        </div>
+                       <div className="text-right">
+                          <button
+                            type="button"
+                            onClick={() => setAuthMode('RESET')}
+                            className="text-sm text-teal-600 hover:underline"
+                          >
+                            Forgot Password?
+                          </button>
+                        </div>
                        
                        <button 
                         type="submit"
@@ -404,7 +463,7 @@ const App: React.FC = () => {
                 )}
 
                 {/* REGISTER MODE */}
-                {authMode === 'REGISTER' && (
+                {authMode === 'REGISTER' && !showRecovery && (
                   <div className="animate-in fade-in">
                       <form onSubmit={handleRegisterSubmit} className="space-y-5 text-left">
                         <div className="flex items-center justify-between mb-4">
@@ -465,7 +524,93 @@ const App: React.FC = () => {
                       </form>
                   </div>
                 )}
+                {authMode === 'RESET' && (
+                  <div className="space-y-6 animate-in fade-in">
+                    <div className="text-center">
+                      <h2 className="text-3xl font-serif font-bold text-slate-900 dark:text-white mb-2">
+                        Reset Password
+                      </h2>
+                      <p className="text-slate-500">Enter your recovery phrase.</p>
+                    </div>
 
+                    <form
+                      onSubmit={async (e) => {
+                        e.preventDefault();
+
+                        const wallet = blockchain.getWalletFromEmail(resetEmail);
+                        const user = await blockchain.getUserByWallet(wallet);
+
+                        if (!user) {
+                          alert("User not found.");
+                          return;
+                        }
+
+                        if (user.recoveryPhrase.trim() !== resetPhrase.trim()) {
+                          alert("Invalid recovery phrase.");
+                          return;
+                        }
+
+                        user.password = newPassword;
+
+                        const users = await blockchain.getUsers();
+                        const updated = users.map(u =>
+                          u.id === user.id ? user : u
+                        );
+
+                        localStorage.setItem("medichain_users", JSON.stringify(updated));
+
+                        alert("Password successfully reset!");
+                        setResetEmail('');
+                        setResetPhrase('');
+                        setNewPassword('');
+                        setAuthMode("LOGIN");
+                      }}
+                      className="space-y-4"
+                    >
+                      <input
+                        type="email"
+                        placeholder="Email"
+                        value={resetEmail}
+                        onChange={(e) => setResetEmail(e.target.value)}
+                        className="w-full p-3 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-teal-500 bg-white dark:bg-slate-800 dark:text-white"
+                        required
+                      />
+
+                      <input
+                        type="password"
+                        placeholder="Recovery Phrase"
+                        value={resetPhrase}
+                        onChange={(e) => setResetPhrase(e.target.value)}
+                        className="w-full p-3 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-teal-500 bg-white dark:bg-slate-800 dark:text-white"
+                        required
+                      />
+
+                      <input
+                        type="password"
+                        placeholder="New Password"
+                        value={newPassword}
+                        onChange={(e) => setNewPassword(e.target.value)}
+                        className="w-full p-3 border border-slate-300 dark:border-slate-600 rounded-lg outline-none focus:ring-2 focus:ring-teal-500 bg-white dark:bg-slate-800 dark:text-white"
+                        required
+                      />
+
+                      <button
+                        type="submit"
+                        className="w-full py-3 bg-teal-600 text-white rounded-lg"
+                      >
+                        Reset Password
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setAuthMode('LOGIN')}
+                        className="w-full text-sm text-slate-500"
+                      >
+                        Back to Login
+                      </button>
+                    </form>
+                  </div>
+                )}
                 {/* SECRET ADMIN LOGIN */}
                 {authMode === 'ADMIN' && (
                    <div className="space-y-6 animate-in fade-in slide-in-from-bottom-2">
