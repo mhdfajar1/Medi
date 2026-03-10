@@ -1,5 +1,6 @@
 
 import { User, MedicalRecord, UserRole, AccessPermission, AuditLog, AccessStatus } from '../types';
+import axios from "axios";
 
 // Helper to simulate network latency
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -346,7 +347,23 @@ export const uploadRecord = async (
   await delay(2000); // Upload + Mining simulation
 
   const txHash = generateHash();
-  const ipfsHash = generateIPFSHash(); 
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const res = await axios.post(
+    "https://api.pinata.cloud/pinning/pinFileToIPFS",
+    formData,
+    {
+      maxBodyLength: Infinity,
+      headers: {
+        "Content-Type": `multipart/form-data`,
+        pinata_api_key: "e80e32f12b12369b163c",
+        pinata_secret_api_key: "d4e85098f99bcacfc7c84d54e3b9a33f56ca57cd9503551b39c10b6b1d59c763"
+      }
+    }
+  );
+
+  const ipfsHash = res.data.IpfsHash; 
   
   // Resolve patient ID
   const users = getStored<User[]>(USERS_KEY, []);

@@ -649,7 +649,7 @@ const PatientDashboard: React.FC<Props> = ({ user, activeTab = 'dashboard' }) =>
 
                         <div className="flex flex-col space-y-2">
                           <a 
-                            href={`https://ipfs.io/ipfs/${record.ipfsHash}`}
+                            href={`https://gateway.pinata.cloud/ipfs/${record.ipfsHash}`}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="px-4 py-2 bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-sm rounded-md hover:bg-slate-50 dark:hover:bg-slate-600 transition shadow-sm flex items-center justify-center font-medium group-hover:border-teal-400 dark:group-hover:border-teal-500/50"
@@ -658,7 +658,7 @@ const PatientDashboard: React.FC<Props> = ({ user, activeTab = 'dashboard' }) =>
                             <svg className="w-4 h-4 mr-2 text-slate-400 group-hover:text-teal-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10" />
                             </svg>
-                            Download from IPFS
+                            View Medical Record
                           </a>
                           <button 
                             onClick={() => initiateAnalysis(record)}
