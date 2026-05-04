@@ -299,17 +299,22 @@ export const grantEmergencyAccess = async (
 
 export const getAccessStatus = async (doctorId: string, patientId: string): Promise<AccessStatus | null> => {
   await delay(300);
-  
-  // Resolve patientId if it's a wallet address
+
   const users = getStored<User[]>(USERS_KEY, []);
-  const targetPatient = users.find(u => (u.id === patientId || u.walletAddress === patientId));
-  const normalizedPid = targetPatient ? targetPatient.id : patientId;
+  const targetPatient = users.find(u => 
+    (u.id === patientId || u.walletAddress === patientId) && u.role === UserRole.PATIENT
+  );
+
+  // ❗ FIX: stop if patient doesn't exist
+  if (!targetPatient) return null;
+
+  const normalizedPid = targetPatient.id;
 
   const permissions = getStored<AccessPermission[]>(PERMISSIONS_KEY, []);
   const perm = permissions.find(p => p.patientId === normalizedPid && p.doctorId === doctorId);
-  
+
   if (perm && perm.expiryTimestamp && Date.now() > perm.expiryTimestamp) {
-    return 'DENIED'; 
+    return 'DENIED';
   }
 
   return perm ? perm.status : null;
@@ -327,14 +332,34 @@ export const getAccessRequestDetails = async (doctorId: string, patientId: strin
 
 export const getPendingRequests = async (patientId: string): Promise<AccessPermission[]> => {
   await delay(500);
+
   const permissions = getStored<AccessPermission[]>(PERMISSIONS_KEY, []);
-  return permissions.filter(p => p.patientId === patientId && p.status === 'PENDING');
+  const users = getStored<User[]>(USERS_KEY, []);
+
+  const target = users.find(u => 
+    u.id === patientId || u.walletAddress === patientId
+  );
+
+  const normalizedId = target ? target.id : patientId;
+
+  return permissions.filter(p => 
+    p.patientId === normalizedId && p.status === 'PENDING'
+  );
 };
 
 export const getAccessList = async (patientId: string): Promise<AccessPermission[]> => {
   await delay(500);
+
+  const users = getStored<User[]>(USERS_KEY, []);
+  const targetPatient = users.find(u => 
+    u.id === patientId || u.walletAddress === patientId
+  );
+
+  const normalizedPid = targetPatient ? targetPatient.id : patientId;
+
   const permissions = getStored<AccessPermission[]>(PERMISSIONS_KEY, []);
-  return permissions.filter(p => p.patientId === patientId);
+
+  return permissions.filter(p => p.patientId === normalizedPid);
 };
 
 // --- RECORD MANAGEMENT ---
@@ -380,7 +405,8 @@ export const uploadRecord = async (
     fileType: file.type,
     category: metadata.category as any,
     timestamp: Date.now(),
-    txHash: txHash
+    txHash: txHash,
+    status: 'ACTIVE'
   };
 
   const records = getStored<MedicalRecord[]>(RECORDS_KEY, []);
@@ -388,6 +414,33 @@ export const uploadRecord = async (
 
   logAudit(uploaderId, `Uploaded record for ${normalizedPid}`, newRecord.id, txHash);
   return newRecord;
+};
+
+export const archiveRecord = async (recordId: string, actorId: string) => {
+  const records = getStored<MedicalRecord[]>(RECORDS_KEY, []);
+
+  const updated = records.map(r =>
+    r.id === recordId ? { ...r, status: 'ARCHIVED' } : r
+  );
+
+  setStored(RECORDS_KEY, updated);
+
+  // 🔹 Create blockchain audit log
+  const logs = getStored<AuditLog[]>(AUDIT_KEY, []);
+
+  const newLog: AuditLog = {
+    id: generateHash(),
+    actorId: actorId,
+    targetId: recordId,
+    action: `Archived medical record ${recordId}`,
+    timestamp: Date.now(),
+    txHash: generateHash()
+  };
+
+  logs.push(newLog);
+  setStored(AUDIT_KEY, logs);
+
+  return true;
 };
 
 export const getPatientRecords = async (patientId: string, requesterId: string, requesterRole: UserRole): Promise<MedicalRecord[]> => {

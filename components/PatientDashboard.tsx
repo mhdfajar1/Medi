@@ -45,6 +45,14 @@ const EmergencyTimer: React.FC<{ expiry: number }> = ({ expiry }) => {
 };
 
 const PatientDashboard: React.FC<Props> = ({ user, activeTab = 'dashboard' }) => {
+  //Helper Function!
+  const resolveSelf = async () => {
+    const users = await blockchain.getUsers();
+    return users.find(u =>
+      u.id === user.id || u.walletAddress === user.walletAddress
+    );
+  };
+  const [initialLoad, setInitialLoad] = useState(true);
   const [records, setRecords] = useState<MedicalRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [doctors, setDoctors] = useState<User[]>([]);
@@ -78,24 +86,51 @@ const PatientDashboard: React.FC<Props> = ({ user, activeTab = 'dashboard' }) =>
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user.id]);
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const self = await resolveSelf();
+        if (!self) return;
+        const pending = await blockchain.getPendingRequests(self.id);
+        setPendingRequests(pending);
+      } catch (err) {
+        console.error("Pending refresh failed", err);
+      }
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [user.id]);
 
   const loadData = async () => {
-    setLoading(true);
+    if (initialLoad) {
+      setLoading(true);
+    }
     try {
+      const self = await resolveSelf();
+      console.log("SELF:", self);
+      if (!self){
+        setLoading(false);
+        return;
+      }
+      const normalizedId = self.id;
       const [myRecords, allUsers, myPermissions, pending, allLogs] = await Promise.all([
-        blockchain.getPatientRecords(user.id, user.id, UserRole.PATIENT),
+        blockchain.getPatientRecords(normalizedId, user.id, UserRole.PATIENT),
         blockchain.getUsers(),
-        blockchain.getAccessList(user.id),
-        blockchain.getPendingRequests(user.id),
+        blockchain.getAccessList(normalizedId),
+        blockchain.getPendingRequests(normalizedId),
         blockchain.getAuditLogs()
       ]);
-      
-      setRecords(myRecords.sort((a, b) => b.timestamp - a.timestamp));
+      console.log("CURRENT USER ID:", normalizedId);
+      console.log("PENDING REQUESTS:", pending);
+      setRecords(
+        myRecords
+          .filter(r => r.status !== 'ARCHIVED')
+          .sort((a, b) => b.timestamp - a.timestamp)
+      );
       setDoctors(allUsers.filter(u => u.role === UserRole.DOCTOR));
       setPermissions(myPermissions.filter(p => p.status === 'GRANTED'));
       setPendingRequests(pending);
 
-      const myLogs = allLogs.filter(l => l.targetId === user.id || l.actorId === user.id)
+      const myLogs = allLogs.filter(l => l.targetId === normalizedId || l.actorId === normalizedId)
                             .sort((a, b) => b.timestamp - a.timestamp);
       setAuditLogs(myLogs);
 
@@ -103,13 +138,18 @@ const PatientDashboard: React.FC<Props> = ({ user, activeTab = 'dashboard' }) =>
       console.error(err);
     } finally {
       setLoading(false);
+      setInitialLoad(false);
     }
   };
 
   const handleAccessRequest = async (doctorId: string, decision: 'GRANTED' | 'DENIED') => {
     setProcessing(true);
     try {
-      await blockchain.respondToAccessRequest(user.id, doctorId, decision);
+      const self = await resolveSelf();
+      if (!self) return;
+      
+      await blockchain.respondToAccessRequest(self.id, doctorId, decision);
+      
       await loadData();
     } catch (err) {
       alert("Transaction Failed");
@@ -675,6 +715,15 @@ const PatientDashboard: React.FC<Props> = ({ user, activeTab = 'dashboard' }) =>
                                  Summarizing...
                                </>
                              ) : visibleAnalyses[record.id] ? 'Hide Summary' : 'Generate Summary'}
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await blockchain.archiveRecord(record.id, user.id);
+                              await loadData();
+                            }}
+                            className="px-4 py-2 bg-red-100 text-red-700 text-sm rounded-md hover:bg-red-200 transition"
+                          >
+                            Archive Record
                           </button>
                         </div>
                       </div>

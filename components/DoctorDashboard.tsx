@@ -11,10 +11,19 @@ interface Props {
 
 const DoctorDashboard: React.FC<Props> = ({ user }) => {
   const [patientId, setPatientId] = useState('');
+  const [normalizedPatientId, setNormalizedPatientId] = useState('');
+  const resolvePatient = async (patientId: string) => {
+    const users = await blockchain.getUsers();
+    return users.find(u =>
+      (u.id === patientId || u.walletAddress === patientId) &&
+      u.role === UserRole.PATIENT
+    );
+  };
   const [currentPatientRecords, setCurrentPatientRecords] = useState<MedicalRecord[]>([]);
   const [viewState, setViewState] = useState<'IDLE' | 'LOADING' | 'VIEWING' | 'ERROR' | 'PENDING'>('IDLE');
   const [errorMsg, setErrorMsg] = useState('');
   const [requestTimestamp, setRequestTimestamp] = useState<number | null>(null);
+  const [showArchived, setShowArchived] = useState(true);
   
   // History Filter State
   const [historyFilter, setHistoryFilter] = useState('All');
@@ -124,52 +133,106 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
     );
   }
 
-  const fetchRecords = async () => {
-    if (!patientId) return;
+ const fetchRecords = async () => {
+  if (!patientId) return;
+
+  setViewState('LOADING');
+  setErrorMsg('');
+
+  try {
+    const target = await resolvePatient(patientId);
+
+    if (!target) {
+      setViewState('ERROR');
+      setErrorMsg("Patient does not exist.");
+      return;
+    }
+
+    
+
+    // ✅ ALWAYS use normalized ID
+    const normalizedPatientId = target.id;
+    setNormalizedPatientId(normalizedPatientId);
+
+    const status = await blockchain.getAccessStatus(user.id, normalizedPatientId);
+
+    if (status === 'GRANTED') {
+      const records = await blockchain.getPatientRecords(
+        normalizedPatientId,
+        user.id,
+        UserRole.DOCTOR
+      );
+
+      setCurrentPatientRecords(records);
+      setViewState('VIEWING');
+      setHistoryFilter('All');
+      setSortConfig({ key: 'timestamp', direction: 'desc' });
+
+    } else if (status === 'PENDING') {
+      const details = await blockchain.getAccessRequestDetails(user.id, normalizedPatientId);
+      if (details) setRequestTimestamp(details.timestamp);
+      setViewState('PENDING');
+
+    } else if (status === 'DENIED') {
+      setViewState('ERROR');
+      setErrorMsg("Access was denied by patient.");
+    } else {
+      setViewState('ERROR');
+      setErrorMsg("No access yet. Request access.");
+    }
+  } catch (err: any) {
+    setViewState('ERROR');
+    setErrorMsg(err.message || "Failed to fetch records");
+  }
+};
+
+const handleRequestAccess = async () => {
+  if (!patientId) return;
+
+  try {
+    const target = await resolvePatient(patientId);
+    
+    if (!target) {
+      alert("Patient does not exist.");
+      return;
+    }
+
+    const normalizedPatientId = target.id;
+    setNormalizedPatientId(normalizedPatientId); // ✅ important
+
     setViewState('LOADING');
     setErrorMsg('');
-    try {
-      // First check status
-      const status = await blockchain.getAccessStatus(user.id, patientId);
-      
-      if (status === 'GRANTED') {
-         const records = await blockchain.getPatientRecords(patientId, user.id, UserRole.DOCTOR);
-         setCurrentPatientRecords(records);
-         setViewState('VIEWING');
-         setHistoryFilter('All');
-         // Reset sort to default on new fetch
-         setSortConfig({ key: 'timestamp', direction: 'desc' });
-      } else if (status === 'PENDING') {
-         const details = await blockchain.getAccessRequestDetails(user.id, patientId);
-         if (details) setRequestTimestamp(details.timestamp);
-         setViewState('PENDING');
-      } else {
-        // null or DENIED
-        throw new Error("Access not granted");
-      }
-    } catch (err: any) {
-      // If error is strictly access denied, we show the Request button
-      setViewState('ERROR');
-      setErrorMsg(err.message || "Failed to fetch records");
-    }
-  };
 
-  const handleRequestAccess = async () => {
-    if (!patientId) return;
-    setViewState('LOADING');
-    try {
-      await blockchain.requestAccess(user.id, patientId);
-      setRequestTimestamp(Date.now());
+    const status = await blockchain.getAccessStatus(user.id, normalizedPatientId);
+
+    if (status === 'GRANTED') {
+      alert("You already have access to this patient.");
+      setViewState('VIEWING');
+      return;
+    }
+
+    if (status === 'PENDING') {
+      alert("Request already pending");
       setViewState('PENDING');
-    } catch (err: any) {
-      setViewState('ERROR');
-      setErrorMsg(err.message || "Failed to send request");
+      return;
     }
-  };
 
+    await blockchain.requestAccess(user.id, normalizedPatientId);
+
+    const details = await blockchain.getAccessRequestDetails(user.id, normalizedPatientId);
+    if (details) setRequestTimestamp(details.timestamp);
+
+    alert("Access request sent successfully.");
+    setViewState('PENDING');
+
+  } catch (err: any) {
+    setViewState('ERROR');
+    setErrorMsg(err.message || "Failed to send request");
+  }
+};
   const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedFile || !patientId) return;
+    if (!selectedFile || !normalizedPatientId) return;
 
     setIsUploading(true);
     setUploadProgress(0);
@@ -184,7 +247,7 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
 
     try {
       await blockchain.uploadRecord(selectedFile, {
-        patientId,
+        patientId: normalizedPatientId,
         doctorName: user.name,
         description: uploadData.description,
         category: uploadData.category as any
@@ -221,14 +284,17 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
 
   // Filter AND Sort Logic
   const processedRecords = currentPatientRecords
-    .filter(rec => {
-      if (historyFilter === 'All') return true;
-      if (historyFilter === 'Clinical') return ['Medical History', 'Treatment Notes', 'Diagnosis', 'Follow-up Report'].includes(rec.category);
-      if (historyFilter === 'Labs') return rec.category === 'Lab Report';
-      if (historyFilter === 'Imaging') return rec.category === 'X-Ray/Scan';
-      if (historyFilter === 'Rx') return rec.category === 'Prescription';
-      return true;
-    })
+  .filter(rec => {
+    // 🔥 NEW: hide archived logic
+    if (!showArchived && rec.status === 'ARCHIVED') return false;
+
+    if (historyFilter === 'All') return true;
+    if (historyFilter === 'Clinical') return ['Medical History', 'Treatment Notes', 'Diagnosis', 'Follow-up Report'].includes(rec.category);
+    if (historyFilter === 'Labs') return rec.category === 'Lab Report';
+    if (historyFilter === 'Imaging') return rec.category === 'X-Ray/Scan';
+    if (historyFilter === 'Rx') return rec.category === 'Prescription';
+    return true;
+  })
     .sort((a, b) => {
       if (sortConfig.key === 'timestamp') {
         return sortConfig.direction === 'asc' 
@@ -422,7 +488,7 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
              </div>
              <h3 className="text-2xl font-bold mb-2">Awaiting Patient Approval</h3>
              <p className="max-w-md mb-6">
-               Access request for <span className="font-mono font-bold bg-yellow-100 dark:bg-yellow-900/50 px-1 rounded">{patientId}</span> has been broadcast to the network.
+               Access request for <span className="font-mono font-bold bg-yellow-100 dark:bg-yellow-900/50 px-1 rounded">{normalizedPatientId}</span> has been broadcast to the network.
                <br/>
                {requestTimestamp && (
                   <span className="block mt-4 text-sm font-semibold opacity-80">
@@ -440,34 +506,30 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
              </button>
           </div>
         )}
-
+        
         {viewState === 'ERROR' && (
           <div className="p-10 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col items-center justify-center text-center shadow-lg h-full">
-            <div className="w-20 h-20 bg-slate-100 dark:bg-slate-700 text-slate-500 dark:text-slate-400 rounded-full flex items-center justify-center mb-6">
-              <svg className="w-10 h-10" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-            </div>
-            <h3 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">Access Restricted</h3>
-            <p className="text-slate-500 dark:text-slate-400 mb-8 max-w-md">
-              You do not currently have permission to view records for patient <span className="font-mono font-bold">{patientId}</span>.
-              <br/>
-              You must request access via the blockchain smart contract.
+            
+            <h3 className="text-2xl font-bold text-slate-800 dark:text-white mb-2">
+              {errorMsg === "Patient does not exist."
+                ? "Patient Not Found"
+                : "Access Restricted"}
+            </h3>
+
+            <p className="text-slate-500 dark:text-slate-400 mb-6">
+              {errorMsg}
             </p>
-            <div className="w-full max-w-sm p-4 bg-slate-50 dark:bg-slate-900 rounded-lg border border-slate-200 dark:border-slate-700 mb-6">
-               <div className="flex justify-between text-xs text-slate-500 mb-2">
-                 <span>Your Wallet:</span>
-                 <span className="font-mono">{user.walletAddress.substring(0, 10)}...</span>
-               </div>
-               <div className="flex justify-between text-xs text-slate-500">
-                 <span>Patient ID:</span>
-                 <span className="font-mono">{patientId}</span>
-               </div>
-            </div>
-            <button 
-              onClick={handleRequestAccess}
-              className="px-8 py-3 bg-teal-600 text-white font-bold rounded-lg hover:bg-teal-700 shadow-md transition transform hover:-translate-y-0.5"
-            >
-              Request Access on Blockchain
-            </button>
+
+            {/* Only show request button if patient EXISTS */}
+            {errorMsg !== "Patient does not exist." && (
+              <button 
+                onClick={handleRequestAccess}
+                className="px-6 py-2 bg-teal-600 text-white rounded-lg hover:bg-teal-700 transition"
+              >
+                Request Access
+              </button>
+            )}
+
           </div>
         )}
 
@@ -488,6 +550,12 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
                       {f}
                     </button>
                   ))}
+                  <button
+                  onClick={() => setShowArchived(prev => !prev)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-200 dark:bg-slate-700"
+                  >
+                    {showArchived ? 'Hide Archived' : 'Show Archived'}
+                  </button>
                </div>
             </div>
 
@@ -523,12 +591,18 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
                     </th>
                     <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">Description</th>
                     <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">Doctor</th>
+                    <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">STATUS</th>
                     <th className="p-4 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
                   {processedRecords.map(rec => (
-                    <tr key={rec.id} className="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <tr 
+                        key={rec.id} 
+                        className={`hover:bg-slate-50 dark:hover:bg-slate-700/50 ${
+                          rec.status === 'ARCHIVED' ? 'opacity-50' : ''
+                        }`}
+                      >
                       <td className="p-4 text-sm text-slate-600 dark:text-slate-300">
                         {new Date(rec.timestamp).toLocaleDateString()}
                       </td>
@@ -543,6 +617,17 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
                       </td>
                       <td className="p-4 text-sm text-slate-800 dark:text-slate-200 font-medium">{rec.description}</td>
                       <td className="p-4 text-sm text-slate-500 dark:text-slate-400">{rec.doctorName}</td>
+                      <td className="p-4">
+                        {rec.status === 'ARCHIVED' ? (
+                          <span className="flex items-center gap-1 px-2 py-1 text-xs font-bold bg-yellow-100 text-yellow-700 rounded">
+                            🟡 Archived
+                          </span>
+                        ) : (
+                          <span className="flex items-center gap-1 px-2 py-1 text-xs font-bold bg-green-100 text-green-700 rounded">
+                            🟢 Active
+                          </span>
+                        )}
+                      </td>
                       <td className="p-4">
                         <a 
                           href={`https://ipfs.io/ipfs/${rec.ipfsHash}`}
@@ -560,7 +645,7 @@ const DoctorDashboard: React.FC<Props> = ({ user }) => {
                   ))}
                   {processedRecords.length === 0 && (
                     <tr>
-                      <td colSpan={5} className="p-8 text-center text-slate-400 dark:text-slate-500">
+                      <td colSpan={6} className="p-8 text-center text-slate-400 dark:text-slate-500">
                         No records found for this category.
                       </td>
                     </tr>

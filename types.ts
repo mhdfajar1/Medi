@@ -31,6 +31,7 @@ export interface MedicalRecord {
   fileType: string;
   timestamp: number;
   txHash: string; // Blockchain transaction hash
+  status?: 'ACTIVE' | 'ARCHIVED'; // Status of the record
   category: 'Prescription' | 'Lab Report' | 'Diagnosis' | 'X-Ray/Scan' | 'Treatment Notes' | 'Follow-up Report' | 'Medical History';
 }
 
